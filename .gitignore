@@ -1,0 +1,21 @@
+# --- Dependencies ---
+node_modules/
+package-lock.json
+
+# --- System Files (Mac/Windows) ---
+.DS_Store
+Thumbs.db
+
+# --- Logs & Testing ---
+npm-debug.log*
+coverage/
+.jest/
+
+# --- IDE Settings (Optional but good practice) ---
+.vscode/
+.idea/
+
+# --- The actual script from the vault (Optional) ---
+# Uncomment the line below if you want to force yourself to always copy
+# a fresh version from the vault and NOT track it in this test repo.
+# content-metadata-view.js
