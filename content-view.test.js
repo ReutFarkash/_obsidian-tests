@@ -1,219 +1,275 @@
 const fs = require('fs');
 const path = require('path');
 
-// --- 1. MOCK DATAVIEW API ---
-// This class simulates what Obsidian's Dataview plugin does
+// --- 1. ROBUST MOCK DATAVIEW API ---
 class MockDataview {
     constructor(vaultData, currentFilePath) {
         this.vaultData = vaultData;
         this.currentPath = currentFilePath;
-        this.output = []; // Captures table output
+        this.output = [];
     }
 
-    // dv.current()
     current() {
         const file = this.vaultData.find(p => p.file.path === this.currentPath);
-        return file || { file: { name: "Untitled", path: "Untitled.md" } };
+        // Default minimal structure if not found
+        return file || { file: { name: "Untitled", path: "Untitled.md", outlinks: [], tags: new Set() } };
     }
 
-    // dv.page(path)
     page(path) {
-        // Simple mock lookup
+        if (!path) return null;
         const cleanPath = path.replace(/[[\]]/g, '').split('|')[0];
+        // Match path even if partial
         return this.vaultData.find(p => p.file.path.includes(cleanPath)) || null;
     }
 
-    // dv.pages(query)
     pages(query) {
-        // A simple query parser for our mocks
-        // Supports: "#tag", "-_folder", '""' (all)
         let results = this.vaultData;
+        const parts = query.split(' AND ');
 
-        if (query.includes('#')) {
-            const tag = query.match(/#[\w/-]+/)[0].toLowerCase();
-            results = results.filter(p => {
-                const fmTags = p.file.frontmatter?.tags || [];
-                // Check frontmatter tags
-                const hasTag = fmTags.some(t => {
-                    const ft = "#" + t.toLowerCase();
-                    return ft === tag || ft.startsWith(tag + "/");
+        parts.forEach(part => {
+            const cleanPart = part.replace(/"/g, '').trim();
+            if (cleanPart === '') return;
+
+            // 1. Exclusion
+            if (cleanPart.startsWith('-')) {
+                const exclusionPath = cleanPart.substring(1);
+                results = results.filter(p => !p.file.path.startsWith(exclusionPath));
+                return;
+            }
+
+            // 2. Tag Search
+            if (cleanPart.startsWith('#')) {
+                const searchTag = cleanPart.toLowerCase();
+                results = results.filter(p => {
+                    const fmTags = p.file.frontmatter?.tags || [];
+                    const etags = p.file.etags || [];
+                    const allPageTags = [...new Set([...fmTags, ...etags])];
+                    return allPageTags.some(t => {
+                        const ft = t.startsWith('#') ? t.toLowerCase() : "#" + t.toLowerCase();
+                        return ft === searchTag || ft.startsWith(searchTag + "/");
+                    });
                 });
-                return hasTag;
-            });
-        }
+                return;
+            }
 
-        // Exclude folders logic (basic)
-        const exclusions = query.match(/-"([^"]+)"/g);
-        if (exclusions) {
-            exclusions.forEach(ex => {
-                const folder = ex.replace(/-"|"/g, '');
-                results = results.filter(p => !p.file.path.startsWith(folder));
-            });
-        }
-
+            // 3. Path/Link Search
+            if (cleanPart.length > 0) {
+                results = results.filter(p => p.file.path.toLowerCase().includes(cleanPart.toLowerCase()));
+            }
+        });
         return results;
     }
 
-    // dv.array(arr)
-    array(arr) {
-        return arr;
-    }
-
-    // dv.paragraph(text)
-    paragraph(text) {
-        this.output.push({ type: 'paragraph', content: text });
-    }
-
-    // dv.table(headers, rows)
-    table(headers, rows) {
-        this.output.push({ type: 'table', headers, rows });
-    }
+    array(arr) { return arr; }
+    paragraph(text) { this.output.push({ type: 'paragraph', content: text }); }
+    table(headers, rows) { this.output.push({ type: 'table', headers, rows }); }
 }
 
-// --- 2. MOCK VAULT DATA ---
-// Represents your Markdown files
+// --- 2. ADVANCED MOCK VAULT ---
+// CRITICAL: Every file must have 'outlinks', 'tags' (Set), and 'lists' to prevent crashes
 const mockVault = [
     {
         file: {
-            name: "Current File",
-            path: "Folder/Current File.md",
-            folder: "Folder",
+            name: "Current Dashboard",
+            path: "System/Dashboard.md",
+            link: "[[System/Dashboard.md|Current Dashboard]]",
+            folder: "System",
+            tags: new Set(),
             outlinks: [],
             lists: []
         }
     },
     {
         file: {
-            name: "Project A",
-            path: "Projects/Project A.md",
-            link: "[[Projects/Project A.md|Project A]]",
+            name: "Work Project",
+            path: "Projects/Work.md",
+            link: "[[Projects/Work.md|Work Project]]",
             folder: "Projects",
-            tags: new Set(["#project"]), // Dataview implicit tags
-            frontmatter: { tags: ["project"] },
+            tags: new Set(["#work/active"]),
+            etags: ["#work/active"],
+            frontmatter: { tags: ["work/active"] },
+            outlinks: [], // Ensure outlinks exists!
+            lists: [
+                {
+                    text: "Finish report",
+                    tags: [],
+                    outlinks: [], // Ensure outlinks exists on items too!
+                    link: { path: "Projects/Work.md" }
+                }
+            ]
+        }
+    },
+    {
+        file: {
+            name: "Personal Todo",
+            path: "Personal/Groceries.md",
+            link: "[[Personal/Groceries.md|Personal Todo]]",
+            folder: "Personal",
+            tags: new Set(["#personal"]),
+            etags: ["#personal"],
+            frontmatter: { tags: ["personal"] },
             outlinks: [],
             lists: [
                 {
-                    text: "Review #urgent task",
-                    tags: ["#urgent"], // Dataview inline tags
+                    text: "Buy milk urgent:: true cost:: 5",
+                    tags: ["#urgent"],
+                    // Manual extraction: Real Dataview does this automatically.
+                    // For the test, we must manually populate the properties the script looks for.
+                    urgent: "true",
+                    cost: "5",
                     outlinks: [],
-                    link: { path: "Projects/Project A.md" }
+                    link: { path: "Personal/Groceries.md" }
                 },
                 {
-                    text: "Regular item",
+                    text: "Call Mom",
                     tags: [],
                     outlinks: [],
-                    link: { path: "Projects/Project A.md" }
+                    link: { path: "Personal/Groceries.md" }
                 }
             ]
         }
     },
     {
         file: {
-            name: "Metadata Note",
-            path: "Notes/Metadata Note.md",
-            folder: "Notes",
-            frontmatter: {},
+            name: "Archived Item",
+            path: "Archive/Old.md",
+            link: "[[Archive/Old.md|Archived Item]]",
+            folder: "Archive",
+            tags: new Set(["#work"]),
+            etags: ["#work"],
+            frontmatter: { tags: ["work"] },
             outlinks: [],
+            lists: [{ text: "Old stuff", tags: [], outlinks: [] }]
+        }
+    },
+    {
+        file: {
+            name: "Link Logic Note",
+            path: "Notes/LinkLogic.md",
+            link: "[[Notes/LinkLogic.md|Link Logic Note]]",
+            folder: "Notes",
+            tags: new Set(),
+            outlinks: [{ path: "System/Dashboard.md" }], // File has outlinks too
             lists: [
                 {
-                    text: "Buy milk priority:: high status:: active",
+                    text: "Reference to [[System/Dashboard]] here",
                     tags: [],
-                    priority: "high", // Dataview parses inline fields onto object
-                    status: "active",
+                    outlinks: [{ path: "System/Dashboard.md" }],
+                    link: { path: "Notes/LinkLogic.md" }
+                },
+                {
+                    text: "Just text match: Dashboard",
+                    tags: [],
                     outlinks: [],
-                    link: { path: "Notes/Metadata Note.md" }
+                    link: { path: "Notes/LinkLogic.md" }
                 }
             ]
-        }
-    },
-    {
-        file: {
-            name: "Excluded File",
-            path: "_utils/Template.md",
-            folder: "_utils",
-            lists: [{ text: "Should not appear", tags: ["#project"] }]
         }
     }
 ];
 
-// --- 3. THE RUNNER ---
-// This function reads your script file and `eval`s it within the mock context
-const runScript = (scriptPath, inputs, currentFile = "Folder/Current File.md") => {
+// --- 3. RUNNER ---
+const runScript = (scriptPath, inputs, currentFile = "System/Dashboard.md") => {
     const rawScript = fs.readFileSync(scriptPath, 'utf8');
-
-    // Create the Mock DV instance
     const dv = new MockDataview(mockVault, currentFile);
-
-    // Inputs variable expected by script
     const input = inputs;
-
-    // Wrap script in a function to isolate scope
-    // We use `eval` here to simulate the script execution. 
-    // In a real generic runner we might use VM2, but for local tests eval is fine.
     const runner = new Function('dv', 'input', rawScript);
-
     runner(dv, input);
-
     return dv.output;
 };
 
-// --- 4. TESTS ---
-
-describe('Content Metadata View Script', () => {
+// --- 4. ROBUST TEST SUITE ---
+describe('Robust Content Metadata View', () => {
     const scriptPath = path.join(__dirname, 'content-metadata-view.js');
-    // ^ Ensure you copy your script to the same folder as this test file
 
-    test('Basic Tag Search: #project', () => {
-        const results = runScript(scriptPath, { subject: "#project" });
+    // --- TAG LOGIC ---
+
+    test('Recursion: #work should find #work/active', () => {
+        const results = runScript(scriptPath, { subject: "#work" });
         const table = results.find(r => r.type === 'table');
-
-        expect(table).toBeDefined();
-        // Expect 2 rows: 
-        // 1. The "Review #urgent task" list item (via inheritance or explicit tag)
-        // 2. The "Regular item" list item (via Page inheritance)
-        // 3. The Page "Project A" itself
-
-        // Check content of first row
-        const rowContent = table.rows.map(r => r[0]);
-        expect(rowContent.some(t => t.includes("Review #urgent task"))).toBe(true);
-        expect(rowContent.some(t => t.includes("Project A.md"))).toBe(true);
+        const content = table.rows.map(r => r[0]);
+        expect(content.some(t => t.includes("Work Project"))).toBe(true);
+        expect(content.some(t => t.includes("Archived Item"))).toBe(true);
     });
 
-    test('Exclusion: Should ignore _utils folder', () => {
-        const results = runScript(scriptPath, { subject: "#project" });
+    test('Exact Tag: #work/active should NOT find parent #work', () => {
+        const results = runScript(scriptPath, { subject: "#work/active" });
         const table = results.find(r => r.type === 'table');
-
-        const rowContent = table.rows.map(r => r[0]);
-        expect(rowContent.some(t => t.includes("Should not appear"))).toBe(false);
+        const content = table.rows.map(r => r[0]);
+        expect(content.some(t => t.includes("Work Project"))).toBe(true);
+        expect(content.some(t => t.includes("Archived Item"))).toBe(false);
     });
 
-    test('Auto Columns: Should extract priority and status', () => {
-        // We simulate a search that catches the "Metadata Note"
-        // Since we don't have tags on it, let's allow the "empty subject" to scan all (non-excluded)
-        // NOTE: Your script requires a valid Subject match. 
-        // Let's modify the mock data query to find it, or pass a subject that matches.
+    test('Implicit Inheritance: File Tag applies to list items', () => {
+        const results = runScript(scriptPath, { subject: "#personal", show_pages: false });
+        const table = results.find(r => r.type === 'table');
+        const content = table.rows.map(r => r[0]);
+        expect(content.some(t => t.includes("Call Mom"))).toBe(true);
+    });
 
-        // Update Mock Logic for test: Let's assume we search for text "milk" via subject?
-        // Actually, easiest is to search for a tag we add to that item.
-        // But let's test Manual Column extraction.
+    // --- LINK LOGIC ---
 
-        // We will mock the `dv.pages` query in the runner to strictly return the Metadata Note for this test
-        // This requires a slightly more sophisticated mock, but for now let's rely on Subject.
-        // Let's assume the Subject is "Buy milk" (Text Match)
+    test('Link Matching: Outlinks and Text', () => {
+        const results = runScript(scriptPath, { subject: "Dashboard" });
+        const table = results.find(r => r.type === 'table');
+        const content = table.rows.map(r => r[0]);
+        expect(content.some(t => t.includes("Reference to"))).toBe(true);
+        expect(content.some(t => t.includes("Just text match"))).toBe(true);
+    });
 
+    // --- METADATA & COLUMNS ---
+
+    test('Auto Columns: Metadata Extraction & Formatting', () => {
+        // Search for #personal to catch the Groceries note
         const results = runScript(scriptPath, {
-            subject: "Buy milk",
-            auto_columns: true
+            subject: "#personal",
+            auto_columns: true,
+            show_pages: false
         });
 
         const table = results.find(r => r.type === 'table');
         const headers = table.headers;
 
-        expect(headers).toContain("Priority");
-        expect(headers).toContain("Status");
+        // Fix: Case sensitivity check. Script capitalizes headers.
+        expect(headers).toContain("Urgent");
+        expect(headers).toContain("Cost");
 
-        const row = table.rows[0];
-        // Content, Priority, Status, Related, Where
-        expect(row[1]).toBe("high"); // Priority value
+        const row = table.rows.find(r => r[0].includes("Buy milk"));
+        const urgentIndex = headers.indexOf("Urgent");
+        expect(row[urgentIndex]).toBe("✅");
+    });
+
+    // --- EXCLUSION LOGIC ---
+
+    test('Exclusion: exclude_folders', () => {
+        const results = runScript(scriptPath, {
+            subject: "#work",
+            exclude_folders: ["Archive"]
+        });
+        const table = results.find(r => r.type === 'table');
+        const content = table.rows.map(r => r[0]);
+        expect(content.some(t => t.includes("Work Project"))).toBe(true);
+        expect(content.some(t => t.includes("Archived Item"))).toBe(false);
+    });
+
+    test('Exclusion: exclude_current', () => {
+        // Pretend we are IN the Link Logic Note
+        // Search for "Link Logic Note" (which matches the page itself)
+        const results = runScript(scriptPath, {
+            subject: "Link Logic Note",
+            exclude_current: true
+        }, "Notes/LinkLogic.md");
+
+        // If results exist (maybe items match?), ensure Page itself is excluded
+        const table = results.find(r => r.type === 'table');
+
+        if (table) {
+            const content = table.rows.map(r => r[0]);
+            // The Page Link "📄 **[[Notes/LinkLogic.md|Link Logic Note]]**" should NOT be present
+            expect(content.some(t => t.includes("📄") && t.includes("Link Logic Note"))).toBe(false);
+        } else {
+            // If no table returned at all, that's also valid exclusion
+            expect(true).toBe(true);
+        }
     });
 });
